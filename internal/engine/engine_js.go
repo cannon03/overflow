@@ -1,13 +1,10 @@
-//go:build !js
+//go:build js
 
 package engine
 
 import (
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"overflow/internal/assets"
 	"overflow/internal/entity"
@@ -16,21 +13,16 @@ import (
 	"overflow/internal/world"
 )
 
-// Run starts the game loop.
+// Run starts the WASM game loop. No signal handling, no raw terminal mode.
 func (e *Engine) Run() {
 	if err := e.setup(); err != nil {
-		e.cleanup()
 		os.Exit(1)
 	}
-	defer e.cleanup()
 
 	e.running = true
 
 	previous := time.Now()
 	var accumulator float64
-
-	sigwinch := make(chan os.Signal, 1)
-	signal.Notify(sigwinch, syscall.SIGWINCH)
 
 	for e.running {
 		frameStart := time.Now()
@@ -40,12 +32,6 @@ func (e *Engine) Run() {
 		accumulator += elapsed
 		if accumulator > FixedDT*MaxFrames {
 			accumulator = FixedDT * MaxFrames
-		}
-
-		select {
-		case <-sigwinch:
-			e.handleResize()
-		default:
 		}
 
 		for accumulator >= FixedDT {
@@ -63,7 +49,7 @@ func (e *Engine) Run() {
 			time.Sleep(targetFrameTime - frameElapsed)
 		}
 
-		// FPS is the measured frame rate
+		// FPS tracking
 		e.fpsAccum++
 		e.fpsTimer += time.Since(frameStart).Seconds()
 		if e.fpsTimer >= 0.5 {
@@ -81,28 +67,31 @@ func (e *Engine) Run() {
 func (e *Engine) setup() error {
 	e.termWidth = 80
 	e.termHeight = 24
-	if w, h, err := getTermSize(); err == nil && w >= 40 && h >= 12 {
-		e.termWidth = w
-		e.termHeight = h
-	}
 
-	e.renderer.EnterAltScreen()
-
-	e.inputDev.EnableRawMode()
 	e.inputDev.Start()
 
 	e.fb = render.NewFramebuffer(e.termWidth, e.termHeight)
 	e.world = world.NewWorld(e.termWidth, e.termHeight)
 
 	// Inject sprites
-	injectSprites(e)
+	e.world.PlayerSpriteNormal = assets.Sprites.PlayerNormal
+	e.world.PlayerSpriteHit = assets.Sprites.PlayerHit
+	e.world.EnemyBasicSprite = assets.Sprites.EnemyBasic
+	e.world.EnemyFastSprite = assets.Sprites.EnemyFast
+	e.world.EnemyTankSprite = assets.Sprites.EnemyTank
+	e.world.EnemyBossSprite = assets.Sprites.EnemyBoss
+	e.world.EnemyBulletSprite = assets.Sprites.EnemyBullet
+	e.world.PlayerBulletSprite = assets.Sprites.PlayerBullet
+	e.world.Explosion1Sprite = assets.Sprites.Explosion1
+	e.world.Explosion2Sprite = assets.Sprites.Explosion2
+	e.world.Explosion3Sprite = assets.Sprites.Explosion3
+	e.world.ParticleDotSprite = assets.Sprites.ParticleDot
+	e.world.ParticleStarSprite = assets.Sprites.ParticleStar
+	e.world.ParticleDiamondSprite = assets.Sprites.ParticleDiamond
 
-	// Re-initialize player with sprites now injected
 	e.world.Reset()
-
 	e.ui = ui.New(e.world, e.termWidth)
 
-	// Initial full render
 	e.fb.Clear()
 	e.world.Draw(e.fb)
 	e.ui.Draw(e.fb)
@@ -162,61 +151,4 @@ func (e *Engine) render() {
 	}
 
 	e.renderer.Render(e.fb)
-}
-
-func (e *Engine) handleResize() {
-	w, h, err := getTermSize()
-	if err != nil || w < 40 || h < 12 {
-		return
-	}
-	e.termWidth = w
-	e.termHeight = h
-
-	e.fb.Resize(w, h)
-	e.world.Resize(w, h)
-	e.fb.Clear()
-	e.world.Draw(e.fb)
-	e.ui.Draw(e.fb)
-	e.renderer.FullRender(e.fb)
-}
-
-func (e *Engine) cleanup() {
-	e.inputDev.Stop()
-	e.inputDev.Restore()
-	e.renderer.ExitAltScreen()
-}
-
-// getTermSize detects terminal size using ioctl.
-func getTermSize() (width, height int, err error) {
-	var winsize struct {
-		Row    uint16
-		Col    uint16
-		Xpixel uint16
-		Ypixel uint16
-	}
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
-		uintptr(syscall.Stdin),
-		syscall.TIOCGWINSZ,
-		uintptr(unsafe.Pointer(&winsize)),
-	); errno != 0 {
-		return 80, 24, errno
-	}
-	return int(winsize.Col), int(winsize.Row), nil
-}
-
-func injectSprites(e *Engine) {
-	e.world.PlayerSpriteNormal = assets.Sprites.PlayerNormal
-	e.world.PlayerSpriteHit = assets.Sprites.PlayerHit
-	e.world.EnemyBasicSprite = assets.Sprites.EnemyBasic
-	e.world.EnemyFastSprite = assets.Sprites.EnemyFast
-	e.world.EnemyTankSprite = assets.Sprites.EnemyTank
-	e.world.EnemyBossSprite = assets.Sprites.EnemyBoss
-	e.world.EnemyBulletSprite = assets.Sprites.EnemyBullet
-	e.world.PlayerBulletSprite = assets.Sprites.PlayerBullet
-	e.world.Explosion1Sprite = assets.Sprites.Explosion1
-	e.world.Explosion2Sprite = assets.Sprites.Explosion2
-	e.world.Explosion3Sprite = assets.Sprites.Explosion3
-	e.world.ParticleDotSprite = assets.Sprites.ParticleDot
-	e.world.ParticleStarSprite = assets.Sprites.ParticleStar
-	e.world.ParticleDiamondSprite = assets.Sprites.ParticleDiamond
 }

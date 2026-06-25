@@ -1,0 +1,9 @@
+[build]
+  publish = "web"
+  command = "make netlify"
+
+[[headers]]
+  for = "*.wasm"
+  [headers.values]
+    Content-Type = "application/wasm"
+    Cache-Control = "public, max-age=31536000, immutable"

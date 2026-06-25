@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OVERFLOW — Bullet Hell</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: monospace;
+            overflow: hidden;
+        }
+        #terminal-container {
+            border: 1px solid #2a2a4a;
+            border-radius: 4px;
+            box-shadow: 0 0 30px rgba(50, 50, 120, 0.3);
+        }
+    </style>
+</head>
+<body>
+<div id="terminal-container"></div>
+
+<!-- ─── 1. Shared state (declared BEFORE wasm_exec.js) ─── -->
+<script>
+    let term = null;
+    let stdinBuffer = [];
+    const textDecoder = new TextDecoder();
+</script>
+
+<!-- ─── 2. WASM runtime — sets up globalThis.fs fully ─── -->
+<script src="wasm_exec.js"></script>
+
+<!-- ─── 3. Override writeSync/readSync after wasm_exec.js set up fs ─── -->
+<script>
+    {
+        const origWriteSync = globalThis.fs.writeSync;
+        globalThis.fs.writeSync = (fd, buf) => {
+            if (fd === 1 || fd === 2) {
+                const str = textDecoder.decode(new Uint8Array(buf));
+                if (term) {
+                    const out = str.replace(/\n/g, '\r\n');
+                    term.write(typeof out === 'string' ? out : String.fromCharCode(...new Uint8Array(buf)));
+                }
+                return buf.length;
+            }
+            return buf.length;
+        };
+
+        // readSync might not exist by default — add it
+        const origReadSync = globalThis.fs.readSync;
+        globalThis.fs.readSync = (fd, buf) => {
+            if (fd === 0) {
+                if (stdinBuffer.length === 0) return 0;
+                const n = Math.min(buf.length, stdinBuffer.length);
+                for (let i = 0; i < n; i++) {
+                    buf[i] = stdinBuffer.shift();
+                }
+                return n;
+            }
+            if (origReadSync) return origReadSync(fd, buf);
+            return 0;
+        };
+    }
+</script>
+
+<!-- ─── 4. xterm.js ─── -->
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+
+<!-- ─── 5. Boot: create terminal, pipe stdin, load WASM ─── -->
+<script>
+    term = new Terminal({
+        cursorStyle: 'block',
+        cursorBlink: false,
+        cols: 80,
+        rows: 24,
+        fontSize: 14,
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Liberation Mono', monospace",
+        lineHeight: 1.0,
+        letterSpacing: 0,
+        theme: {
+            background: '#0a0a1e',      foreground: '#c8c8dc',
+            cursor: '#64c8ff',
+            black: '#000000',           red: '#ff3232',
+            green: '#32ff32',           yellow: '#ffff50',
+            blue: '#3232ff',            magenta: '#ff32ff',
+            cyan: '#64ffff',            white: '#c8c8dc',
+            brightBlack: '#3c3c46',     brightRed: '#ff6464',
+            brightGreen: '#64ff64',     brightYellow: '#ffff96',
+            brightBlue: '#6464ff',      brightMagenta: '#ff64ff',
+            brightCyan: '#64ffff',      brightWhite: '#ffffff',
+        },
+        allowTransparency: true,
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal-container'));
+    fitAddon.fit();
+
+    window.addEventListener('resize', () => fitAddon.fit());
+
+    // Pipe xterm.js input into the stdin buffer
+    term.onData(data => {
+        for (let i = 0; i < data.length; i++) {
+            stdinBuffer.push(data.charCodeAt(i));
+        }
+    });
+
+    // Show loading message
+    term.writeln('\x1b[36mLoading OVERFLOW...\x1b[0m');
+
+    // Polyfill instantiateStreaming if needed
+    if (!WebAssembly.instantiateStreaming) {
+        WebAssembly.instantiateStreaming = async (resp, importObject) => {
+            const source = await (await resp).arrayBuffer();
+            return await WebAssembly.instantiate(source, importObject);
+        };
+    }
+
+    const go = new Go();
+    go.argv = ['overflow'];
+    go.env = {};
+    go.exit = (code) => {};
+
+    WebAssembly.instantiateStreaming(fetch('main.wasm'), go.importObject)
+        .then(result => {
+            go.run(result.instance);
+        })
+        .catch(err => {
+            term.writeln('\r\n\x1b[31mFailed to load game:\x1b[0m ' + err.message);
+            console.error(err);
+        });
+</script>
+</body>
+</html>
